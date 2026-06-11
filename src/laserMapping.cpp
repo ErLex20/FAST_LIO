@@ -1075,6 +1075,16 @@ private:
             if (effect_pub_en) publish_effect_world(pubLaserCloudEffect_);
             // if (map_pub_en) publish_map(pubLaserCloudMap_);
 
+            const double t_elapsed = omp_get_wtime() - t0;
+            static int num_scans = 0;
+            static double mean_time = 0.0;
+            num_scans++;
+            mean_time += (t_elapsed - mean_time) / static_cast<double>(num_scans);
+            RCLCPP_INFO(this->get_logger(),
+                        "End-to-end execution time: %.2f ms (mean: %.2f ms)",
+                        t_elapsed * 1000.0,
+                        mean_time * 1000.0);
+
             /*** Debug variables ***/
             if (runtime_pos_log)
             {
