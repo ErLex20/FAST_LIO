@@ -39,6 +39,9 @@
 #include <fstream>
 #include <csignal>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <unistd.h>
 #include <Python.h>
 #include <so3_math.h>
@@ -142,6 +145,57 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
+
+ofstream timing_log_file;
+string timing_log_filename;
+mutex timing_log_mutex;
+rclcpp::Clock::SharedPtr timing_log_clock;
+
+void init_timing_log(rclcpp::Node &node)
+{
+    timing_log_clock = node.get_clock();
+
+    const auto current_time = chrono::system_clock::now();
+    const auto time = chrono::system_clock::to_time_t(current_time);
+    const tm local_time = *localtime(&time);
+
+    ostringstream filename;
+    filename << "fast_lio_" << put_time(&local_time, "%Y%m%d_%H%M%S");
+
+    bool use_sim_time = false;
+    node.get_parameter("use_sim_time", use_sim_time);
+    if (use_sim_time) filename << "_sim";
+    filename << ".csv";
+
+    timing_log_filename = "/home/neo/workspace/logs/" + filename.str();
+    timing_log_file.open(timing_log_filename, ios::out);
+    if (!timing_log_file.is_open())
+    {
+        RCLCPP_ERROR(node.get_logger(), "Failed to open timing log file: %s", timing_log_filename.c_str());
+        return;
+    }
+
+    timing_log_file << "timestamp,thread,process_time_ms" << endl;
+    RCLCPP_INFO(node.get_logger(), "Timing log initialized: %s", timing_log_filename.c_str());
+}
+
+void log_process_time(const string &thread_name, double time_ms)
+{
+    if (!timing_log_file.is_open() || !timing_log_clock) return;
+
+    lock_guard<mutex> lock(timing_log_mutex);
+    timing_log_file << fixed << setprecision(6) << timing_log_clock->now().seconds() << ","
+                    << thread_name << "," << setprecision(3) << time_ms << endl;
+}
+
+void close_timing_log(const rclcpp::Logger &logger)
+{
+    lock_guard<mutex> lock(timing_log_mutex);
+    if (!timing_log_file.is_open()) return;
+
+    timing_log_file.close();
+    RCLCPP_INFO(logger, "Timing log closed: %s", timing_log_filename.c_str());
+}
 
 void SigHandle(int sig)
 {
@@ -297,7 +351,9 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
     }
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
+    const double preprocess_start = omp_get_wtime();
     p_pre->process(msg, ptr);
+    log_process_time("preprocess", (omp_get_wtime() - preprocess_start) * 1000.0);
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(cur_time);
     last_timestamp_lidar = cur_time;
@@ -338,7 +394,9 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
     }
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
+    const double preprocess_start = omp_get_wtime();
     p_pre->process(msg, ptr);
+    log_process_time("preprocess", (omp_get_wtime() - preprocess_start) * 1000.0);
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(last_timestamp_lidar);
     
@@ -870,6 +928,8 @@ public:
         this->get_parameter_or<vector<double>>("mapping.extrinsic_T", extrinT, vector<double>());
         this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR, vector<double>());
 
+        init_timing_log(*this);
+
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
         path.header.stamp = this->get_clock()->now();
@@ -949,6 +1009,7 @@ public:
 
     ~LaserMappingNode()
     {
+        close_timing_log(this->get_logger());
         fout_out.close();
         fout_pre.close();
         fclose(fp);
@@ -959,11 +1020,13 @@ private:
     {
         if(sync_packages(Measures))
         {
+            const double mapping_start = omp_get_wtime();
             if (flg_first_scan)
             {
                 first_lidar_time = Measures.lidar_beg_time;
                 p_imu->first_lidar_time = first_lidar_time;
                 flg_first_scan = false;
+                log_process_time("mapping", (omp_get_wtime() - mapping_start) * 1000.0);
                 return;
             }
 
@@ -983,6 +1046,7 @@ private:
             if (feats_undistort->empty() || (feats_undistort == NULL))
             {
                 RCLCPP_WARN(this->get_logger(), "No point, skip this scan!\n");
+                log_process_time("mapping", (omp_get_wtime() - mapping_start) * 1000.0);
                 return;
             }
 
@@ -1010,6 +1074,7 @@ private:
                     }
                     ikdtree.Build(feats_down_world->points);
                 }
+                log_process_time("mapping", (omp_get_wtime() - mapping_start) * 1000.0);
                 return;
             }
             int featsFromMapNum = ikdtree.validnum();
@@ -1021,6 +1086,7 @@ private:
             if (feats_down_size < 5)
             {
                 RCLCPP_WARN(this->get_logger(), "No point, skip this scan!\n");
+                log_process_time("mapping", (omp_get_wtime() - mapping_start) * 1000.0);
                 return;
             }
             
@@ -1080,6 +1146,7 @@ private:
             static double mean_time = 0.0;
             num_scans++;
             mean_time += (t_elapsed - mean_time) / static_cast<double>(num_scans);
+            log_process_time("mapping", (omp_get_wtime() - mapping_start) * 1000.0);
             RCLCPP_INFO(this->get_logger(),
                         "End-to-end execution time: %.2f ms (mean: %.2f ms)",
                         t_elapsed * 1000.0,
