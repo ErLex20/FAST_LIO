@@ -85,6 +85,10 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, Po
       mid360_handler(msg);
       break;
 
+    case ROBOSENSE:
+      robosense_handler(msg);
+      break;
+
     default:
       default_handler(msg);
       break;
@@ -222,7 +226,9 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &
       added_pt.x = pl_orig.points[i].x;
       added_pt.y = pl_orig.points[i].y;
       added_pt.z = pl_orig.points[i].z;
-      added_pt.intensity = pl_orig.points[i].intensity;
+      added_pt.intensity = pl_orig.points[i].intensity > 0.f
+          ? pl_orig.points[i].intensity
+          : static_cast<float>(pl_orig.points[i].reflectivity);
       added_pt.normal_x = 0;
       added_pt.normal_y = 0;
       added_pt.normal_z = 0;
@@ -280,7 +286,9 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &
       added_pt.x = pl_orig.points[i].x;
       added_pt.y = pl_orig.points[i].y;
       added_pt.z = pl_orig.points[i].z;
-      added_pt.intensity = pl_orig.points[i].intensity;
+      added_pt.intensity = pl_orig.points[i].intensity > 0.f
+          ? pl_orig.points[i].intensity
+          : static_cast<float>(pl_orig.points[i].reflectivity);
       added_pt.normal_x = 0;
       added_pt.normal_y = 0;
       added_pt.normal_z = 0;
@@ -553,6 +561,44 @@ void Preprocess::mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &
     {
       pl_surf.push_back(std::move(added_pt));
     }
+  }
+}
+
+void Preprocess::robosense_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg)
+{
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+
+  pcl::PointCloud<ts_ros::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  int plsize = pl_orig.points.size();
+  if (plsize == 0)
+    return;
+  pl_surf.reserve(plsize);
+
+  // rslidar_sdk stamps the header at scan start; curvature is offset in ms.
+  const double header_time_s = rclcpp::Time(msg->header.stamp).seconds();
+
+  for (int i = 0; i < plsize; i++)
+  {
+    if (i % point_filter_num != 0)
+      continue;
+    const auto &src = pl_orig.points[i];
+    if (src.x * src.x + src.y * src.y + src.z * src.z <= (blind * blind))
+      continue;
+
+    PointType added_pt;
+    added_pt.normal_x = 0;
+    added_pt.normal_y = 0;
+    added_pt.normal_z = 0;
+    added_pt.x = src.x;
+    added_pt.y = src.y;
+    added_pt.z = src.z;
+    added_pt.intensity = src.intensity;
+    added_pt.curvature = static_cast<float>((src.timestamp - header_time_s) * 1000.0);
+
+    pl_surf.push_back(std::move(added_pt));
   }
 }
 

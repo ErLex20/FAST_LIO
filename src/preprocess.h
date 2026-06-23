@@ -16,8 +16,9 @@ enum LID_TYPE
   AVIA = 1,
   VELO16,
   OUST64,
-  MID360
-};  //{1, 2, 3}
+  MID360,
+  ROBOSENSE
+};  //{1, 2, 3, 4, 5}
 enum TIME_UNIT
 {
   SEC = 0,
@@ -91,7 +92,7 @@ struct EIGEN_ALIGN16 Point
   float intensity;
   uint32_t t;
   uint16_t reflectivity;
-  uint8_t ring;
+  uint16_t ring;
   uint16_t ambient;
   uint32_t range;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -107,10 +108,27 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     // use std::uint32_t to avoid conflicting with pcl::uint32_t
     (std::uint32_t, t, t)
     (std::uint16_t, reflectivity, reflectivity)
-    (std::uint8_t, ring, ring)
+    (std::uint16_t, ring, ring)
     (std::uint16_t, ambient, ambient)
     (std::uint32_t, range, range)
 )
+
+// Point type for drivers that publish an absolute per-point timestamp (double).
+// Used by RoboSense rslidar_sdk ('timestamp' field, absolute seconds).
+namespace ts_ros
+{
+struct EIGEN_ALIGN16 Point
+{
+  PCL_ADD_POINT4D;
+  float intensity;
+  double timestamp;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+}  // namespace ts_ros
+POINT_CLOUD_REGISTER_POINT_STRUCT(ts_ros::Point,
+    (float, x, x)(float, y, y)(float, z, z)
+    (float, intensity, intensity)
+    (double, timestamp, timestamp))
 
 namespace livox_ros
 {
@@ -159,6 +177,7 @@ private:
   void oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
+  void robosense_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void default_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void give_feature(PointCloudXYZI &pl, vector<orgtype> &types);
   void pub_func(PointCloudXYZI &pl, const rclcpp::Time &ct);
