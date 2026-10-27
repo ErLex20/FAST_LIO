@@ -170,6 +170,9 @@ class Preprocess
   int lidar_type, point_filter_num, N_SCANS, SCAN_RATE, time_unit;
   double blind;
   bool feature_enabled, given_offset_time;
+  // dotX patch: absolute time of the earliest point of the last ROBOSENSE scan, used as scan
+  // start because rslidar_sdk stamps the header at the last point
+  double scan_begin_time = 0.0;
   // ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:

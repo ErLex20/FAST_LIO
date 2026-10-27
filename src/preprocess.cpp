@@ -309,6 +309,16 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr
 
   pcl::PointCloud<velodyne_ros::Point> pl_orig;
   pcl::fromROSMsg(*msg, pl_orig);
+  // dotX patch: drop non-finite returns (rslidar clouds read through this handler carry NaN for
+  // empty returns; NaN passes the blind test and yields a NaN scan end time). No-op for clouds
+  // without NaN, e.g. the IILABS3D VLP-16
+  pl_orig.points.erase(
+    std::remove_if(pl_orig.points.begin(), pl_orig.points.end(),
+                   [](const velodyne_ros::Point &p)
+                   { return !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z); }),
+    pl_orig.points.end());
+  pl_orig.width = pl_orig.points.size();
+  pl_orig.height = 1;
   int plsize = pl_orig.points.size();
   if (plsize == 0)
     return;
@@ -577,14 +587,23 @@ void Preprocess::robosense_handler(const sensor_msgs::msg::PointCloud2::UniquePt
     return;
   pl_surf.reserve(plsize);
 
-  // rslidar_sdk stamps the header at scan start; curvature is offset in ms.
-  const double header_time_s = rclcpp::Time(msg->header.stamp).seconds();
+  // dotX patch: the IILABS3D rslidar_sdk header is stamped at the LAST point (point times span
+  // [-0.1, 0] s around it), while FAST-LIO treats the scan time as its start; offsets are taken
+  // from the earliest point instead, and the callback uses scan_begin_time as the scan time
+  double header_time_s = pl_orig.points[0].timestamp;
+  for (const auto &p : pl_orig.points)
+    header_time_s = std::min(header_time_s, p.timestamp);
+  scan_begin_time = header_time_s;
 
   for (int i = 0; i < plsize; i++)
   {
     if (i % point_filter_num != 0)
       continue;
     const auto &src = pl_orig.points[i];
+    // dotX patch: rslidar_sdk emits NaN for empty returns; NaN fails the blind test below as
+    // false and would otherwise reach the (is_dense) cloud
+    if (!std::isfinite(src.x) || !std::isfinite(src.y) || !std::isfinite(src.z))
+      continue;
     if (src.x * src.x + src.y * src.y + src.z * src.z <= (blind * blind))
       continue;
 
@@ -600,6 +619,10 @@ void Preprocess::robosense_handler(const sensor_msgs::msg::PointCloud2::UniquePt
 
     pl_surf.push_back(std::move(added_pt));
   }
+
+  // dotX patch: sync_packages takes the scan end from points.back(), so keep the cloud time-ordered
+  std::stable_sort(pl_surf.points.begin(), pl_surf.points.end(),
+                   [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
 }
 
 void Preprocess::default_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg)

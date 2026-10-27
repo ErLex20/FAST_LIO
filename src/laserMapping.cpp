@@ -354,6 +354,8 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
     const double preprocess_start = omp_get_wtime();
     p_pre->process(msg, ptr);
     log_process_time("preprocess", (omp_get_wtime() - preprocess_start) * 1000.0);
+    // dotX patch: RoboSense headers are stamped at the last point, see Preprocess::robosense_handler
+    if (p_pre->lidar_type == ROBOSENSE && !ptr->points.empty()) cur_time = p_pre->scan_begin_time;
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(cur_time);
     last_timestamp_lidar = cur_time;
